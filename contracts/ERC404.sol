@@ -22,11 +22,12 @@ abstract contract ERC404 is IERC404 {
   uint8 public immutable decimals;
 
   /// @dev Units for ERC-20 representation
-  uint256 public immutable units;
+  uint256 public immutable units; //最小erc20 decimals单位gwei
 
   /// @dev Total supply in ERC-20 representation
   uint256 public totalSupply;
 
+  //铭文最大编号
   /// @dev Current mint counter which also represents the highest
   ///      minted id, monotonically increasing to ensure accurate ownership
   uint256 internal _minted;
@@ -49,6 +50,7 @@ abstract contract ERC404 is IERC404 {
   /// @dev Approval for all in ERC-721 representation
   mapping(address => mapping(address => bool)) public isApprovedForAll;
 
+  //id -> (address,ownedIndex)
   /// @dev Packed representation of ownerOf and owned indices
   mapping(uint256 => uint256) internal _ownedData;
 
@@ -121,6 +123,7 @@ abstract contract ERC404 is IERC404 {
     return _minted;
   }
 
+  //银行 订单 ？ _storedERC721Ids
   function erc721TokensBankedInQueue() public view virtual returns (uint256) {
     return _storedERC721Ids.length();
   }
@@ -153,6 +156,7 @@ abstract contract ERC404 is IERC404 {
 
       emit ERC721Approval(erc721Owner, spender_, id);
     } else {
+      //精度要18个0 ？要不然不重复了
       // Prevent granting 0x0 an ERC-20 allowance.
       if (spender_ == address(0)) {
         revert InvalidSpender();
@@ -222,6 +226,8 @@ abstract contract ERC404 is IERC404 {
         revert RecipientIsERC721TransferExempt();
       }
 
+      //转移721给id
+      //转移1标准单位20给to ?
       // Transfer 1 * units ERC-20 and 1 ERC-721 token.
       // ERC-721 transfer exemptions handled above. Can't make it to this point if either is transfer exempt.
       _transferERC20(from_, to_, units);
@@ -231,6 +237,7 @@ abstract contract ERC404 is IERC404 {
       uint256 value = valueOrId_;
       uint256 allowed = allowance[from_][msg.sender];
 
+      //这要是减成负数，不是bug报错了？
       // Check that the operator has sufficient allowance.
       if (allowed != type(uint256).max) {
         allowance[from_][msg.sender] = allowed - value;
@@ -246,7 +253,7 @@ abstract contract ERC404 is IERC404 {
 
   /// @notice Function for ERC-20 transfers.
   /// @dev This function assumes the operator is attempting to transfer as ERC-20
-  ///      given this function is only supported on the ERC-20 interface. 
+  ///      given this function is only supported on the ERC-20 interface.
   ///      Treats even small amounts that are valid ERC-721 ids as ERC-20s.
   function transfer(address to_, uint256 value_) public virtual returns (bool) {
     // Prevent burning tokens to 0x0.
@@ -407,6 +414,7 @@ abstract contract ERC404 is IERC404 {
     emit ERC20Transfer(from_, to_, value_);
   }
 
+  //id从from转到to时，一顿操作索引指向。
   /// @notice Consolidated record keeping function for transferring ERC-721s.
   /// @dev Assign the token to the new owner, and remove from the old owner.
   /// Note that this function allows transfers to and from 0x0.
@@ -421,16 +429,18 @@ abstract contract ERC404 is IERC404 {
       // On transfer of an NFT, any previous approval is reset.
       delete getApproved[id_];
 
+      //最后1个id
       uint256 updatedId = _owned[from_][_owned[from_].length - 1];
       if (updatedId != id_) {
         uint256 updatedIndex = _getOwnedIndex(id_);
         // update _owned for sender
+        //把最后1个id，补到要转移的id的索引 上
         _owned[from_][updatedIndex] = updatedId;
         // update index for the moved id
         _setOwnedIndex(updatedId, updatedIndex);
       }
 
-      // pop
+      // pop 干掉最后1个id
       _owned[from_].pop();
     }
 
@@ -461,6 +471,7 @@ abstract contract ERC404 is IERC404 {
     uint256 erc20BalanceOfSenderBefore = erc20BalanceOf(from_);
     uint256 erc20BalanceOfReceiverBefore = erc20BalanceOf(to_);
 
+    //转移erc20数
     _transferERC20(from_, to_, value_);
 
     // Preload for gas savings on branches
@@ -486,7 +497,10 @@ abstract contract ERC404 is IERC404 {
           i++;
         }
       }
-    } else if (isToERC721TransferExempt) {
+    }
+
+    //如果to是swap交易所，那么兑换出去多少，就放到队列里多少id的721
+    else if (isToERC721TransferExempt) {
       // Case 3) The sender is not ERC-721 transfer exempt, but the recipient is. Contract should attempt
       //         to withdraw and store ERC-721s from the sender, but the recipient should not
       //         receive ERC-721s from the bank/minted.
@@ -531,7 +545,13 @@ abstract contract ERC404 is IERC404 {
       // drop below the original balance % units, which represents the number of whole tokens they started with.
       uint256 fractionalAmount = value_ % units;
 
+      //erc20BalanceOfSenderBefore = 8050
+      //fractionalAmount = 50
+      //value_ = 2090
+      //uints = 1000
       if (
+      //7(7960) < 8(8050)
+      //手里多了，要放到银行里
         (erc20BalanceOfSenderBefore - fractionalAmount) / units <
         (erc20BalanceOfSenderBefore / units)
       ) {
@@ -580,6 +600,7 @@ abstract contract ERC404 is IERC404 {
     }
   }
 
+  //从银行里给to或者mint一个新的id给to
   /// @notice Internal function for ERC-721 minting and retrieval from the bank.
   /// @dev This function will allow minting of new ERC-721s up to the total fractional supply. It will
   ///      first try to pull from the bank, and if the bank is empty, it will mint a new token.
@@ -614,6 +635,7 @@ abstract contract ERC404 is IERC404 {
     _transferERC721(erc721Owner, to_, id);
   }
 
+  //取出一个id，存入队列
   /// @notice Internal function for ERC-721 deposits to bank (this contract).
   /// @dev This function will allow depositing of ERC-721s to the bank, which can be retrieved by future minters.
   // Does not handle ERC-721 exemptions.
@@ -650,6 +672,7 @@ abstract contract ERC404 is IERC404 {
   ) internal view virtual returns (address ownerOf_) {
     uint256 data = _ownedData[id_];
 
+    //为啥把地址存到uint里？省gas?
     assembly {
       ownerOf_ := and(data, _BITMASK_ADDRESS)
     }
@@ -668,6 +691,7 @@ abstract contract ERC404 is IERC404 {
     _ownedData[id_] = data;
   }
 
+  //某1个id占用这个人的id列表中的第几个索引
   function _getOwnedIndex(
     uint256 id_
   ) internal view virtual returns (uint256 ownedIndex_) {
